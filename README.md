@@ -86,3 +86,7 @@ No pandas, no sklearn, no scipy. Pure NumPy throughout.
 ---
 
 Built with ❤️ by Hamadullah Rajpar
+
+# You can see the live demo here: https://ml-predictor-hamad.netlify.app/
+
+<img width="1920" height="2465" alt="image" src="https://github.com/user-attachments/assets/662c9483-4b54-4528-b0d7-69b0eda56a6f" />
