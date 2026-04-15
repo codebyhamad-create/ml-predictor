@@ -7,11 +7,14 @@ Usage: streamlit run run_all.py
 
 import streamlit as st
 import numpy as np
-import os
-import json
+# Removed os and json imports as they are not used in the main flow anymore
+# and the export button is being removed.
 
 # ── Page Config ──
 st.set_page_config(page_title="ML Insight Studio", layout="wide")
+
+# --- Sanity Check ---
+st.write("If you see this, Streamlit is working!")
 
 st.markdown("""
     <style>
@@ -122,7 +125,7 @@ with tabs[0]:
         x_input = (np.array([sqft, beds, age]) - mn_reg) / rng_reg
         price_pred = w_reg[0] + np.dot(x_input, w_reg[1:])
         
-        if st.button("Calculate Price"):
+        if st.button("Calculate Price", key="reg_calc_button"):
             st.metric("Estimated Value", f"${price_pred:,.2f}")
 
     with col2:
@@ -188,9 +191,3 @@ with tabs[2]:
 
 st.sidebar.markdown("---")
 st.sidebar.write("Built with pure NumPy & Streamlit")
-
-if st.sidebar.button("Export JSON Data"):
-    # This keeps the original functionality of generating static data
-    os.makedirs("static", exist_ok=True)
-    # (Regression export logic here if needed...)
-    st.sidebar.success("Exported to static/ folder")
