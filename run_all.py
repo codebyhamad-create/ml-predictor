@@ -1,193 +1,181 @@
 """
 run_all.py
 ----------
-Streamlit ML Insight Studio - Interactive Dashboard
-Usage: streamlit run run_all.py
+Runs all three ML models and launches the web app.
+Usage:  python run_all.py
 """
 
-import streamlit as st
+import os, sys, json, subprocess
+
+ROOT = os.path.dirname(os.path.abspath(__file__))
+os.chdir(ROOT)
+os.makedirs("static", exist_ok=True)
+
+print("=" * 54)
+print("  ML Insight Studio — Model Runner")
+print("=" * 54)
+
 import numpy as np
-# Removed os and json imports as they are not used in the main flow anymore
-# and the export button is being removed.
 
-# ── Page Config ──
-st.set_page_config(page_title="ML Insight Studio", layout="wide")
+# ── 1. Regression ────────────────────────────────────────
+print("\n[1/3] Training Linear Regression (House Price)...")
+np.random.seed(42)
+n = 200
+size_sqft   = np.random.randint(500, 3500, n).astype(float)
+bedrooms    = np.random.randint(1, 6, n).astype(float)
+age_years   = np.random.randint(0, 40, n).astype(float)
 
-# --- Sanity Check ---
-st.write("If you see this, Streamlit is working!")
+# More realistic relationship
+price = (120 * size_sqft) + (15000 * bedrooms) - (800 * age_years) + 50000 + np.random.normal(0, 20000, n)
+X = np.column_stack([size_sqft, bedrooms, age_years])
+y = price
 
-st.markdown("""
-    <style>
-    .main { background-color: #fdfaf5; }
-    h1, h2, h3 { font-family: 'Playfair Display', serif; color: #4a4a4a; }
-    .stButton>button { background-color: #d4a373; color: white; border-radius: 5px; }
-    </style>
-""", unsafe_allow_html=True)
+# 80/20 Train-Test Split
+split = int(0.8 * n)
+X_tr, X_te = X[:split], X[split:]
+y_tr, y_te = y[:split], y[split:]
 
-st.title("🏛️ ML Insight Studio")
-st.write("Three predictive models built from scratch with pure NumPy.")
+# Scaler (Fit on train only to avoid Data Leakage)
+mn, mx = X_tr.min(0), X_tr.max(0)
+rng = np.where(mx - mn == 0, 1, mx - mn)
+Xs = (X_tr - mn) / rng
+Xts = (X_te - mn) / rng
 
-# ── 1. Regression Logic ──
-@st.cache_resource
-def train_regression():
-    np.random.seed(42)
-    n = 200
-    size_sqft = np.random.randint(500, 3500, n).astype(float)
-    bedrooms = np.random.randint(1, 6, n).astype(float)
-    age_years = np.random.randint(0, 40, n).astype(float)
-    price = (120 * size_sqft) + (15000 * bedrooms) - (800 * age_years) + 50000 + np.random.normal(0, 20000, n)
-    X = np.column_stack([size_sqft, bedrooms, age_years])
-    
-    split = int(0.8 * n)
-    X_tr, X_te = X[:split], X[split:]
-    y_tr, y_te = price[:split], price[split:]
-    
-    mn, mx = X_tr.min(0), X_tr.max(0)
-    rng = np.where(mx - mn == 0, 1, mx - mn)
-    
-    # Training OLS
-    Xs = (X_tr - mn) / rng
+# OLS Solution
+Xb = np.c_[np.ones(len(Xs)), Xs]
+w = np.linalg.pinv(Xb.T @ Xb) @ Xb.T @ y_tr
+Xbt = np.c_[np.ones(len(Xts)), Xts]
+y_pred = Xbt @ w
+
+ss_res = np.sum((y_te - y_pred)**2)
+ss_tot = np.sum((y_te - np.mean(y_te))**2)
+r2 = 1 - (ss_res / ss_tot)
+rmse = np.sqrt(np.mean((y_te - y_pred)**2))
+
+print(f"    R²={r2:.4f}  RMSE=${rmse:,.0f}")
+
+export = {
+    "metrics": {
+        "r2": round(float(r2), 4),
+        "mse": round(float(np.mean((y_te-y_pred)**2)), 2),
+        "rmse": round(float(rmse), 2),
+        "mae": round(float(np.mean(np.abs(y_te-y_pred))), 2)
+    },
+    "scatter": {
+        "actual": [round(float(v), 2) for v in y_te],
+        "predicted": [round(float(v), 2) for v in y_pred]
+    },
+    "feature_importance": {
+        "features": ["Size (sqft)", "Bedrooms", "Age (years)"],
+        "weights": [round(float(ww), 4) for ww in w[1:]]
+    },
+    "intercept": round(float(w[0]), 2)
+}
+with open("static/regression_data.json","w") as f: json.dump(export,f,indent=2)
+
+# ── 2. Classification ─────────────────────────────────────
+print("\n[2/3] Training Logistic Regression (Churn)...")
+np.random.seed(7)
+n = 300
+tenure = np.random.randint(1, 72, n).astype(float)
+monthly = np.random.uniform(20, 120, n)
+calls = np.random.randint(0, 10, n).astype(float)
+contract = np.random.choice([1, 12, 24], n).astype(float)
+
+log_odds = -0.05*tenure + 0.03*monthly + 0.4*calls - 0.1*contract - 1.0
+prob = 1 / (1 + np.exp(-log_odds))
+# Sampling for realistic labels (prevents 100% accuracy)
+y = (np.random.rand(n) < prob).astype(int)
+
+X = np.column_stack([tenure, monthly, calls, contract])
+split = int(0.8 * n)
+X_tr, X_te = X[:split], X[split:]
+y_tr, y_te = y[:split], y[split:]
+
+mu, sd = X_tr.mean(0), np.where(X_tr.std(0) == 0, 1, X_tr.std(0))
+Xs, Xts = (X_tr - mu) / sd, (X_te - mu) / sd
+w = np.zeros(Xs.shape[1] + 1)
+
+for _ in range(500):
     Xb = np.c_[np.ones(len(Xs)), Xs]
-    weights = np.linalg.pinv(Xb.T @ Xb) @ Xb.T @ y_tr
-    return weights, mn, rng
+    z = Xb @ w
+    p = 1 / (1 + np.exp(-np.clip(z, -500, 500)))
+    w -= 0.1 * (Xb.T @ (p - y_tr) / len(y_tr))
 
-# ── 2. Classification Logic ──
-@st.cache_resource
-def train_classification():
-    np.random.seed(7)
-    n = 300
-    tenure = np.random.randint(1, 72, n).astype(float)
-    monthly = np.random.uniform(20, 120, n)
-    calls = np.random.randint(0, 10, n).astype(float)
-    contract = np.random.choice([1, 12, 24], n).astype(float)
-    
-    log_odds = -0.05*tenure + 0.03*monthly + 0.4*calls - 0.1*contract - 1.0
-    prob = 1 / (1 + np.exp(-log_odds))
-    y = (np.random.rand(n) < prob).astype(int)
-    X = np.column_stack([tenure, monthly, calls, contract])
-    
-    split = int(0.8 * n)
-    X_tr = X[:split]
-    y_tr = y[:split]
-    
-    mu, sd = X_tr.mean(0), np.where(X_tr.std(0) == 0, 1, X_tr.std(0))
-    Xs = (X_tr - mu) / sd
-    
-    w = np.zeros(Xs.shape[1] + 1)
-    for _ in range(500):
-        Xb = np.c_[np.ones(len(Xs)), Xs]
-        z = Xb @ w
-        p = 1 / (1 + np.exp(-np.clip(z, -500, 500)))
-        w -= 0.1 * (Xb.T @ (p - y_tr) / len(y_tr))
-    return w, mu, sd
+Xbt = np.c_[np.ones(len(Xts)), Xts]
+proba = 1 / (1 + np.exp(-np.clip(Xbt @ w, -500, 500)))
+y_pred = (proba >= 0.5).astype(int)
 
-# ── 3. Recommendation Logic ──
-@st.cache_resource
-def build_recommender():
-    movies = ['Inception','The Dark Knight','Interstellar','Avengers','The Notebook','Pride & Prejudice','The Shining','Get Out','Parasite','Whiplash','La La Land','Toy Story']
-    genres = ['sci-fi','action','sci-fi','action','romance','romance','horror','horror','thriller','drama','musical','animation']
-    ratings = np.array([
-        [5,4,5,3,0,0,2,0,4,3,0,0], [4,5,3,5,0,0,0,3,0,0,0,0],
-        [0,0,0,0,5,5,0,0,0,4,5,0], [0,0,0,0,0,0,5,5,4,0,0,0],
-        [5,3,4,0,0,0,0,0,5,5,0,0], [0,0,0,3,5,4,0,0,0,0,5,4],
-        [3,5,0,5,0,0,4,3,0,0,0,0], [0,0,5,0,4,0,0,0,5,4,0,0],
-        [0,0,0,0,0,5,4,0,0,5,5,3], [4,0,4,0,0,0,3,4,4,0,0,0]
-    ], dtype=float)
-    
-    def cos_sim(a, b):
-        mask = (a > 0) & (b > 0)
-        if mask.sum() == 0: return 0.0
-        a_, b_ = a[mask], b[mask]
-        d = np.linalg.norm(a_) * np.linalg.norm(b_)
-        return float(np.dot(a_, b_) / d) if d else 0.0
+tp=int(np.sum((y_te==1)&(y_pred==1))); fp=int(np.sum((y_te==0)&(y_pred==1))); tn=int(np.sum((y_te==0)&(y_pred==0))); fn=int(np.sum((y_te==1)&(y_pred==0)))
+acc=(tp+tn)/len(y_te); prec=tp/(tp+fp) if tp+fp else 0; rec=tp/(tp+fn) if tp+fn else 0; f1=2*prec*rec/(prec+rec) if prec+rec else 0
+thresholds=np.linspace(0,1,50); fprs=[]; tprs=[]
+for t in thresholds:
+    pp=(proba>=t).astype(int); tp_=int(np.sum((y_te==1)&(pp==1))); fp_=int(np.sum((y_te==0)&(pp==1))); tn_=int(np.sum((y_te==0)&(pp==0))); fn_=int(np.sum((y_te==1)&(pp==0)))
+    tprs.append(round(tp_/(tp_+fn_),4) if tp_+fn_ else 0); fprs.append(round(fp_/(fp_+tn_),4) if fp_+tn_ else 0)
 
-    n_u = ratings.shape[0]
-    S = np.zeros((n_u, n_u))
-    for i in range(n_u):
-        for j in range(n_u): S[i,j] = cos_sim(ratings[i], ratings[j])
-    return S, ratings, movies, genres
+auc = round(abs(float(np.trapezoid(tprs, fprs))), 4)
+print(f"    Accuracy={acc:.2%}  F1={f1:.4f}  AUC={auc:.4f}")
 
-# ── Main UI Layout ──
-tabs = st.tabs(["Act I: Regression", "Act II: Classification", "Act III: Recommendation"])
+export={"metrics":{"accuracy":round(acc,4),"precision":round(prec,4),"recall":round(rec,4),"f1":round(f1,4)},"confusion":{"tp":tp,"fp":fp,"tn":tn,"fn":fn},"auc":auc,"roc":{"fpr":fprs,"tpr":tprs},"feature_names":["Tenure","Monthly Charges","Support Calls","Contract Length"],"feature_weights":[round(float(ww),4) for ww in w[1:]],"class_distribution":{"churn":int(np.sum(y==1)),"no_churn":int(np.sum(y==0))}}
+with open("static/classification_data.json","w") as f: json.dump(export,f,indent=2)
 
-# --- Act I: House Price Prediction ---
-with tabs[0]:
-    st.header("Linear Regression: House Price Predictor")
-    col1, col2 = st.columns([1, 1])
-    
-    with col1:
-        st.subheader("Property Details")
-        sqft = st.slider("Size (sqft)", 500, 4000, 1500)
-        beds = st.number_input("Bedrooms", 1, 10, 3)
-        age = st.slider("Age (years)", 0, 100, 10)
-        
-        w_reg, mn_reg, rng_reg = train_regression()
-        x_input = (np.array([sqft, beds, age]) - mn_reg) / rng_reg
-        price_pred = w_reg[0] + np.dot(x_input, w_reg[1:])
-        
-        if st.button("Calculate Price", key="reg_calc_button"):
-            st.metric("Estimated Value", f"${price_pred:,.2f}")
-
-    with col2:
-        st.info("**Model Insight:** This uses Ordinary Least Squares (OLS) with a closed-form solution via the Moore-Penrose pseudoinverse.")
-
-# --- Act II: Customer Churn ---
-with tabs[1]:
-    st.header("Logistic Regression: Churn Classifier")
-    c1, c2 = st.columns([1, 1])
-    
-    with c1:
-        st.subheader("Customer Profile")
-        ten = st.slider("Tenure (months)", 1, 72, 12)
-        mon = st.slider("Monthly Charges ($)", 20, 150, 70)
-        cal = st.number_input("Support Calls", 0, 20, 2)
-        con = st.selectbox("Contract", [1, 12, 24], format_func=lambda x: f"{x} Months")
-        
-        w_clf, mu_clf, sd_clf = train_classification()
-        x_in = (np.array([ten, mon, cal, con]) - mu_clf) / sd_clf
-        z = w_clf[0] + np.dot(x_in, w_clf[1:])
-        prob_churn = 1 / (1 + np.exp(-z))
-        
-        st.write(f"**Churn Probability:** {prob_churn:.1%}")
-        if prob_churn > 0.5:
-            st.error("Result: High Risk of Churn")
-        else:
-            st.success("Result: Low Risk / Retained")
-            
-    with c2:
-        st.info("**Model Insight:** Trained via Gradient Descent (500 epochs) using binary cross-entropy loss.")
-
-# --- Act III: Recommendations ---
-with tabs[2]:
-    st.header("Collaborative Filtering: Movie Recs")
-    S_mat, R_mat, movie_list, genre_list = build_recommender()
-    
-    user_id = st.selectbox("Select User Profile", range(10), format_func=lambda x: f"User {x}")
-    
-    st.subheader(f"Top Recommendations for {f'User {user_id}'}")
-    
-    sims = S_mat[user_id].copy()
-    sims[user_id] = 0
-    top4_users = np.argsort(sims)[::-1][:4]
-    
-    unrated = np.where(R_mat[user_id] == 0)[0]
-    preds = []
+# ── 3. Recommendation ─────────────────────────────────────
+print("\n[3/3] Building Collaborative Filter (Movies)...")
+np.random.seed(99)
+movies=['Inception','The Dark Knight','Interstellar','Avengers','The Notebook','Pride & Prejudice','The Shining','Get Out','Parasite','Whiplash','La La Land','Toy Story']
+genres=['sci-fi','action','sci-fi','action','romance','romance','horror','horror','thriller','drama','musical','animation']
+ratings=np.array([[5,4,5,3,0,0,2,0,4,3,0,0],[4,5,3,5,0,0,0,3,0,0,0,0],[0,0,0,0,5,5,0,0,0,4,5,0],[0,0,0,0,0,0,5,5,4,0,0,0],[5,3,4,0,0,0,0,0,5,5,0,0],[0,0,0,3,5,4,0,0,0,0,5,4],[3,5,0,5,0,0,4,3,0,0,0,0],[0,0,5,0,4,0,0,0,5,4,0,0],[0,0,0,0,0,5,4,0,0,5,5,3],[4,0,4,0,0,0,3,4,4,0,0,0]],dtype=float)
+n_users,n_movies=ratings.shape
+def cos_sim(a,b):
+    mask=(a>0)&(b>0)
+    if mask.sum()==0: return 0.0
+    a_,b_=a[mask],b[mask]; d=np.linalg.norm(a_)*np.linalg.norm(b_)
+    return float(np.dot(a_,b_)/d) if d else 0.0
+S=np.zeros((n_users,n_users))
+for i in range(n_users):
+    for j in range(n_users): S[i,j]=cos_sim(ratings[i],ratings[j])
+all_recs={}
+for uid in range(n_users):
+    sims=S[uid].copy(); sims[uid]=0
+    top4=np.argsort(sims)[::-1][:4]
+    unrated=np.where(ratings[uid]==0)[0]; preds={}
     for m in unrated:
-        num, den = 0.0, 0.0
-        for u in top4_users:
-            if R_mat[u, m] > 0:
-                num += sims[u] * R_mat[u, m]
-                den += abs(sims[u])
-        if den > 0:
-            preds.append((m, num/den))
-    
-    preds = sorted(preds, key=lambda x: x[1], reverse=True)[:5]
-    
-    if preds:
-        for idx, score in preds:
-            st.write(f"- **{movie_list[idx]}** ({genre_list[idx]}) — *Predicted Rating: {score:.2f}*")
-    else:
-        st.write("No recommendations available.")
+        num,den=0.0,0.0
+        for u in top4:
+            if ratings[u,m]>0: num+=sims[u]*ratings[u,m]; den+=abs(sims[u])
+        if den>0: preds[int(m)]=round(num/den,3)
+    sorted_preds=sorted(preds.items(),key=lambda x:x[1],reverse=True)[:5]
+    all_recs[uid]=[{'movie_idx':idx,'movie':movies[idx],'genre':genres[idx],'score':score} for idx,score in sorted_preds]
+print(f"    {n_users} users × {n_movies} movies  sparsity={1-int(np.sum(ratings>0))/(n_users*n_movies):.0%}")
+export={'movies':movies,'genres':genres,'user_names':[f'User {i}' for i in range(n_users)],'ratings':ratings.tolist(),'similarity':[[round(float(v),3) for v in row] for row in S],'recommendations':{str(k):v for k,v in all_recs.items()},'stats':{'rated_items':int(np.sum(ratings>0)),'unrated_items':int(np.sum(ratings==0)),'avg_rating':round(float(np.mean(ratings[ratings>0])),3),'sparsity':round(1-int(np.sum(ratings>0))/(n_users*n_movies),4),'n_users':n_users,'n_movies':n_movies}}
+with open("static/recommendation_data.json","w") as f: json.dump(export,f,indent=2)
 
-st.sidebar.markdown("---")
-st.sidebar.write("Built with pure NumPy & Streamlit")
+print("\n" + "=" * 54)
+print("  All models trained. JSON data saved to static/")
+print("=" * 54)
+print("\n  Open index.html in a browser, or run a local server:")
+print("  python -m http.server 8000")
+print("  then visit http://localhost:8000\n")
+
+# ── Deploy to Netlify ─────────────────────────────────────
+print("Deploying to Netlify...")
+try:
+    # Check if netlify CLI is installed
+    subprocess.run(["netlify", "--version"], capture_output=True, check=True)
+    # Assuming the site is already initialized and logged in
+    result = subprocess.run(["netlify", "deploy", "--dir", ".", "--prod"], capture_output=True, text=True)
+    if result.returncode == 0:
+        print("Deployment successful!")
+        print(result.stdout)
+    else:
+        print("Deployment failed:")
+        print(result.stderr)
+        print("Make sure you have run 'netlify login' and 'netlify init' first.")
+except subprocess.CalledProcessError:
+    print("Netlify CLI not found. Please install Node.js and run:")
+    print("  npm install -g netlify-cli")
+    print("Then login and init:")
+    print("  netlify login")
+    print("  netlify init")
+except Exception as e:
+    print(f"Error during deployment: {e}")
